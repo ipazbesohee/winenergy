@@ -1,5 +1,0 @@
-{
-  "rewrites": [
-    { "source": "/anthropic/v1/:path*", "destination": "/api/anthropic/v1/:path*" }
-  ]
-}
