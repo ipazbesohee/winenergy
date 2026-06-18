@@ -78,6 +78,65 @@ export async function getProductsByUValue(
 }
 
 /**
+ * 제품 추천 전용: 열관류율 기준 이하 제품을 열관류율 오름차순으로 정렬하여 상위 N개 반환.
+ * DB에서 직접 정렬하므로 정확한 최저 Uw 제품이 반환됩니다.
+ */
+export async function getRecommendedProducts(
+  uwThreshold: number,
+  limit: number = 5,
+  glassConfig?: string,
+  gasType?: string,
+  frameType?: string,
+  loweCoating?: string
+) {
+  console.log(`[Supabase] 추천 조회: 열관류율 <= ${uwThreshold}, 유리구성: ${glassConfig||'전체'}, 충전기체: ${gasType||'전체'}, 프레임재질: ${frameType||'전체'}, 로이코팅: ${loweCoating||'전체'}, limit: ${limit}`);
+
+  let query = supabase
+    .from('products')
+    .select('*')
+    .lte('열관류율', uwThreshold);
+
+  if (glassConfig && glassConfig !== '전체') {
+    query = query.eq('유리구성', glassConfig);
+  }
+  if (gasType && gasType !== '전체') {
+    if (gasType === '기타') {
+      query = query.neq('충전기체', '아르곤');
+    } else {
+      query = query.eq('충전기체', gasType);
+    }
+  }
+  if (frameType && frameType !== '전체') {
+    if (frameType === '기타') {
+      query = query.neq('프레임재질', '알루미늄').neq('프레임재질', 'PVC');
+    } else {
+      query = query.eq('프레임재질', frameType);
+    }
+  }
+  if (loweCoating && loweCoating !== '전체') {
+    const isLowe = loweCoating === '적용';
+    query = query.eq('로이여부', isLowe);
+  }
+
+  query = query
+    .order('열관류율', { ascending: true })
+    .limit(limit);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('[Supabase] 추천 제품 조회 실패:', error.message);
+    throw error;
+  }
+
+  console.log(`[Supabase] 추천 조회 결과: ${data?.length || 0}개 (Uw ≤ ${uwThreshold}, 오름차순)`);
+  if (data && data.length > 0) {
+    console.log('[Supabase] 추천 상위 3개 Uw:', data.slice(0, 3).map((p: any) => p.열관류율));
+  }
+  return data;
+}
+
+/**
  * diagnoses 테이블에 진단 결과를 저장합니다.
  */
 export async function saveDiagnosis(data: object) {

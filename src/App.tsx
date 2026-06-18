@@ -28,6 +28,7 @@ import {
   Wind,
   XCircle,
   Sun,
+  HelpCircle,
   Moon,
   MessageSquare,
   Send,
@@ -49,7 +50,7 @@ import {
 } from "recharts";
 import { cn } from "@/src/lib/utils";
 import { getClaudeWindowAnalysis, getClaudeChatbotResponse, type ClaudeAnalysisResult } from "@/src/lib/claude";
-import { getProductsByUValue, getProductStats } from "@/src/lib/supabase";
+import { getProductsByUValue, getProductStats, getRecommendedProducts } from "@/src/lib/supabase";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas-pro";
 
@@ -437,9 +438,22 @@ const Card = ({ title, icon: _Icon, children, className }: any) => (
   </div>
 );
 
-const InputField = ({ label, value, onChange, type = "number", ...props }: any) => (
+const InputField = ({ label, value, onChange, type = "number", tooltip, ...props }: any) => (
   <div className="space-y-1.5">
-    <label className="text-xs font-semibold uppercase tracking-tight" style={{ color: "var(--color-text-sub)" }}>{label}</label>
+    <div className="flex items-center gap-1">
+      <label className="text-xs font-semibold uppercase tracking-tight" style={{ color: "var(--color-text-sub)" }}>{label}</label>
+      {tooltip && (
+        <div className="relative group inline-block leading-none">
+          <span className="cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+            <HelpCircle className="w-3.5 h-3.5" />
+          </span>
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-all duration-200 w-52 p-2.5 bg-slate-900/95 dark:bg-slate-950/95 backdrop-blur-sm text-slate-100 text-[10.5px] rounded-lg shadow-xl border border-slate-700/50 dark:border-slate-800/80 z-50 text-center leading-normal normal-case font-medium whitespace-pre-line">
+            {tooltip}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95 dark:border-t-slate-950/95"></div>
+          </div>
+        </div>
+      )}
+    </div>
     <input
       type={type}
       value={value}
@@ -450,9 +464,22 @@ const InputField = ({ label, value, onChange, type = "number", ...props }: any) 
   </div>
 );
 
-const SelectField = ({ label, value, onChange, options }: any) => (
+const SelectField = ({ label, value, onChange, options, tooltip }: any) => (
   <div className="space-y-1.5">
-    <label className="text-xs font-semibold uppercase tracking-tight" style={{ color: "var(--color-text-sub)" }}>{label}</label>
+    <div className="flex items-center gap-1">
+      <label className="text-xs font-semibold uppercase tracking-tight" style={{ color: "var(--color-text-sub)" }}>{label}</label>
+      {tooltip && (
+        <div className="relative group inline-block leading-none">
+          <span className="cursor-help text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+            <HelpCircle className="w-3.5 h-3.5" />
+          </span>
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-all duration-200 w-52 p-2.5 bg-slate-900/95 dark:bg-slate-950/95 backdrop-blur-sm text-slate-100 text-[10.5px] rounded-lg shadow-xl border border-slate-700/50 dark:border-slate-800/80 z-50 text-center leading-normal normal-case font-medium whitespace-pre-line">
+            {tooltip}
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95 dark:border-t-slate-950/95"></div>
+          </div>
+        </div>
+      )}
+    </div>
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -875,7 +902,7 @@ function StatsTab({ isDarkMode }: { isDarkMode: boolean }) {
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--color-text)" }}>
           
-          제품 통계 대시보드
+          데이터 개요
         </h3>
         <div className="flex items-center gap-3">
           <span className="text-xs font-bold" style={{ color: "var(--color-text-sub)" }}>
@@ -1809,7 +1836,8 @@ function App() {
     frame: "AL",
     area: 15,
     glassConfig: "triple",
-    loweCoating: "yes"
+    loweCoating: "yes",
+    gasType: "argon"
   });
   const [result, setResult] = useState<any>(null);
   const [tab, setTab] = useState("stats");
@@ -1822,6 +1850,56 @@ function App() {
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isStarted, setIsStarted] = useState(false);
+  const [inputSubView, setInputSubView] = useState<"question" | "form" | "recommend">("question");
+  const [recommendInput, setRecommendInput] = useState({ region: "central2", buildingType: "residential_apartment", contactType: "direct", area: 15, glassConfig: "전체", gasType: "전체", frameType: "전체", loweCoating: "전체" });
+  const [prefilledProductModel, setPrefilledProductModel] = useState<string | null>(null);
+
+  const handleSelectProductForDiagnosis = (product: any) => {
+    let mappedFrame = "AL";
+    if (product.프레임재질 === "알루미늄") mappedFrame = "AL";
+    else if (product.프레임재질 === "PVC") mappedFrame = "PVC";
+    else if (product.프레임재질 && product.프레임재질.includes("AL+PVC")) mappedFrame = "AL_PVC";
+    else if (product.프레임재질 === "기타") mappedFrame = "all";
+    else mappedFrame = "AL";
+
+    let mappedGlass = "triple";
+    if (product.유리구성 === "단층") mappedGlass = "single";
+    else if (product.유리구성 === "복층") mappedGlass = "double";
+    else if (product.유리구성 === "삼중") mappedGlass = "triple";
+
+    const isLowe = product.로이여부 === true || product.로이여부 === 'true' || product.로이여부 === 1;
+    const mappedLowe = isLowe ? "yes" : "no";
+
+    let mappedGas = "argon";
+    if (product.충전기체 === "공기") mappedGas = "air";
+    else if (product.충전기체 === "아르곤") mappedGas = "argon";
+
+    const defaultShgc = 0.40;
+    const defaultAirtight = 3; // 스펙 비교 시 불리함을 방지하기 위해 일반 창호 평균 기준(3등급)을 기본으로 적용
+    const defaultTdr = 0.30;   // 일반 창호 평균 기준(0.30)을 기본으로 적용
+
+    setInput({
+      region: recommendInput.region,
+      buildingType: recommendInput.buildingType,
+      contactType: recommendInput.contactType,
+      uValue: typeof product.열관류율 === 'number' ? product.열관류율 : parseFloat(product.열관류율) || 1.0,
+      shgc: defaultShgc,
+      airtight: defaultAirtight,
+      tdr: defaultTdr,
+      frame: mappedFrame,
+      area: recommendInput.area || 15,
+      glassConfig: mappedGlass,
+      loweCoating: mappedLowe,
+      gasType: mappedGas
+    });
+
+    setPrefilledProductModel(product.모델명 || "추천 제품");
+    setInputSubView("form");
+  };
+
+  const [recommendResults, setRecommendResults] = useState<any[] | null>(null);
+  const [recommendLoading, setRecommendLoading] = useState(false);
+  const [recommendError, setRecommendError] = useState<string | null>(null);
   const [glassType, setGlassType] = useState<"single" | "double" | "triple">("triple");
   const [isHovered, setIsHovered] = useState(false);
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
@@ -2100,7 +2178,7 @@ function App() {
         if (b.compositeScore !== a.compositeScore) {
           return b.compositeScore - a.compositeScore;
         }
-        return (a.열관류율 || 0) - (b.열관류율 || 0);
+        return (parseFloat(a.열관류율) || 0) - (parseFloat(b.열관류율) || 0);
       });
 
       const finalProducts = scoredProducts.slice(0, 10);
@@ -2161,8 +2239,7 @@ function App() {
         "pdf-page-cover",
         "pdf-page-input",
         "pdf-page-score",
-        "pdf-page-ai",
-        "pdf-page-products"
+        "pdf-page-ai"
       ];
 
       for (let i = 0; i < pageIds.length; i++) {
@@ -2437,7 +2514,7 @@ function App() {
 
           <nav className="flex items-center gap-1 bg-slate-200/50 dark:bg-slate-900/60 p-1 rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto no-scrollbar transition-colors">
             {[
-              { id: "stats", label: "통계", icon: TrendingUp, disabled: false },
+              { id: "stats", label: "DB 현황", icon: TrendingUp, disabled: false },
               { id: "input", label: "데이터 입력", icon: Settings2, disabled: false },
               { id: "result", label: "진단 결과", icon: LayoutDashboard, disabled: !result },
               { id: "ai", label: "심층 분석", icon: Sparkles, disabled: !result },
@@ -2461,6 +2538,7 @@ function App() {
                     }, 2000);
                   } else {
                     setTab(t.id);
+                    if (t.id === "input") setInputSubView("question");
                     setActiveTooltipTab(null);
                   }
                 }}
@@ -2483,135 +2561,526 @@ function App() {
             {/* --- INPUT TAB --- */}
             {tab === "input" && (
               <motion.div
+                key={inputSubView}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="grid grid-cols-1 md:grid-cols-3 gap-6"
               >
-                <div className="md:col-span-2 space-y-6">
-                  <Card title="기본 정보 및 성능 사양" icon={Settings2}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      <SelectField 
-                        label="분석 지역" 
-                        value={input.region} 
-                        onChange={(v: string) => hc("region", v)}
-                        options={Object.entries(REGIONS).map(([k, v]) => ({ value: k, label: v.name }))}
-                      />
-                      <SelectField 
-                        label="건물 용도" 
-                        value={input.buildingType} 
-                        onChange={(v: string) => hc("buildingType", v)}
-                        options={BUILDING_TYPES}
-                      />
-                      <SelectField 
-                        label="외기 접촉 여부" 
-                        value={input.contactType} 
-                        onChange={(v: string) => hc("contactType", v)}
-                        options={CONTACT_TYPES}
-                      />
-                      <InputField label="창호 면적 (m²)" value={input.area} onChange={(v: string) => hc("area", parseFloat(v))} />
-                      <SelectField 
-                        label="프레임 재질" 
-                        value={input.frame} 
-                        onChange={(v: string) => hc("frame", v)}
-                        options={FRAME_TYPES.map(f => ({ value: f, label: FRAME_LABELS[f] }))}
-                      />
+                {/* --- 분기 질문 화면 --- */}
+                {inputSubView === "question" && (
+                  <div className="flex flex-col items-center justify-center min-h-[420px] py-12 px-4">
+                    <div className="max-w-lg w-full text-center space-y-8">
+                      <div className="space-y-2">
+                        <p className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--color-primary)" }}>데이터 입력</p>
+                        <h2 className="text-2xl font-black" style={{ color: "var(--color-text)" }}>
+                          검토 중인 창호 제품이 있으신가요?
+                        </h2>
+                        <p className="text-sm" style={{ color: "var(--color-text-sub)" }}>
+                          진행 방식을 선택해주세요.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <motion.button
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={() => setInputSubView("form")}
+                          className="flex flex-col items-center gap-3 p-6 rounded-2xl border-2 border-slate-200 dark:border-slate-800/80 bg-[var(--color-card)] hover:border-blue-500/60 hover:bg-blue-500/5 dark:hover:bg-blue-500/10 transition-all cursor-pointer text-center group"
+                        >
+                          <div className="w-12 h-12 rounded-xl bg-slate-500/10 text-slate-500 flex items-center justify-center group-hover:bg-blue-500/15 group-hover:text-blue-500 transition-colors">
+                            <Settings2 className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <p className="font-black text-sm" style={{ color: "var(--color-text)" }}>네, 검토 중인 제품이 있어요</p>
+                            <p className="text-xs mt-1 font-semibold text-slate-400 group-hover:text-blue-500 transition-colors">(스펙 입력 및 진단)</p>
+                          </div>
+                        </motion.button>
+                        <motion.button
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={() => setInputSubView("recommend")}
+                          className="flex flex-col items-center gap-3 p-6 rounded-2xl border-2 border-slate-200 dark:border-slate-800/80 bg-[var(--color-card)] hover:border-emerald-500/60 hover:bg-emerald-500/5 dark:hover:bg-emerald-500/10 transition-all cursor-pointer text-center group"
+                        >
+                          <div className="w-12 h-12 rounded-xl bg-slate-500/10 text-slate-500 flex items-center justify-center group-hover:bg-emerald-500/15 group-hover:text-emerald-500 transition-colors">
+                            <Database className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <p className="font-black text-sm leading-snug" style={{ color: "var(--color-text)" }}>아니요, 조건에 맞는 제품을 <br /> 찾고 싶어요</p>
+                            <p className="text-xs mt-1 font-semibold text-slate-400 group-hover:text-emerald-500 transition-colors">(맞춤 제품 검색)</p>
+                          </div>
+                        </motion.button>
+                      </div>
                     </div>
-                  </Card>
-
-                  <Card title="창호 구성 정보" icon={Info}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      <SelectField 
-                        label="유리구성" 
-                        value={input.glassConfig} 
-                        onChange={(v: string) => hc("glassConfig", v)}
-                        options={[
-                          { value: "single", label: "단층" },
-                          { value: "double", label: "복층" },
-                          { value: "triple", label: "삼중" }
-                        ]}
-                      />
-                      <SelectField 
-                        label="로이코팅 여부" 
-                        value={input.loweCoating} 
-                        onChange={(v: string) => hc("loweCoating", v)}
-                        options={[
-                          { value: "yes", label: "적용" },
-                          { value: "no", label: "미적용" }
-                        ]}
-                      />
-                    </div>
-                  </Card>
-
-                  <Card title="창호 성능 입력" icon={Thermometer}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      <InputField label="열관류율 (U-value) (W/m²·K)" value={input.uValue} onChange={(v: string) => hc("uValue", parseFloat(v))} step="0.01" />
-                      <InputField label="일사열취득률 (SHGC) (참고값)" value={input.shgc} onChange={(v: string) => hc("shgc", parseFloat(v))} step="0.01" />
-                      <SelectField 
-                        label="기밀성 등급" 
-                        value={input.airtight} 
-                        onChange={(v: string) => hc("airtight", parseInt(v))}
-                        options={AIRTIGHT_GRADES.map(g => ({ value: g, label: `${g}등급` }))}
-                      />
-                      <InputField label="결로방지성능 (TDR)" value={input.tdr} onChange={(v: string) => hc("tdr", parseFloat(v))} step="0.01" />
-                    </div>
-                  </Card>
-
-                  <Card title="분석 기준 설정 (Thresholds)" icon={Settings2} className="border-blue-500/20 bg-blue-500/5">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                      <InputField label="U-value 기준" value={thresholds.uValue} onChange={(v: string) => ht("uValue", parseFloat(v))} step="0.1" />
-                      <SelectField 
-                        label="기밀성 기준" 
-                        value={thresholds.airtight} 
-                        onChange={(v: string) => ht("airtight", parseInt(v))}
-                        options={AIRTIGHT_GRADES.map(g => ({ value: g, label: `${g}등급 이하` }))}
-                      />
-                      <InputField label="TDR 기준" value={thresholds.tdr} onChange={(v: string) => ht("tdr", parseFloat(v))} step="0.01" />
-                    </div>
-                    <p className="text-[10px] text-blue-400/60 mt-4 italic">
-                      * 건물 및 지역 조건을 변경하면 기준이 자동으로 설정되지만, 필요시 임의 조정이 가능합니다.
-                    </p>
-                  </Card>
-                </div>
-
-                <aside className="space-y-6">
-                  <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 shadow-xl shadow-blue-900/20">
-                    <h3 className="text-xl font-black text-white mb-2">진단 시작</h3>
-                    <p className="text-blue-100 text-xs leading-relaxed mb-6">
-                      입력된 데이터를 바탕으로 에너지 효율 등급을 계산하고 개선 방안을 도출합니다.
-                    </p>
-                    <motion.button 
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={handleRunAnalysis}
-                      className="w-full bg-white text-blue-700 font-black py-3 rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center gap-2 group cursor-pointer shadow-md"
-                    >
-                      분석 실행
-                      <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                    </motion.button>
                   </div>
+                )}
 
-                  <Card title="도움말" icon={Info}>
-                    <ul className="space-y-3 text-xs text-slate-400">
-                      <li className="flex gap-2">
-                        <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
-                        <span><strong>열관류율<br />(U-value)</strong>: 낮을수록 단열 성능이 우수하며, 지역+용도+외기접촉 조합에 맞춘 법적 기준이 자동 적용됩니다.</span>
-                      </li>
-                      <li className="flex gap-2">
-                        <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
-                        <span><strong>외기간접<br />접촉</strong>: 외기에 직접 면하지 않는 조건일 경우 직접 대비 1.5배 완화된 U-value 기준이 자동 설정됩니다.</span>
-                      </li>
-                      <li className="flex gap-2">
-                        <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
-                        <span><strong>결로방지<br />(TDR)</strong>: 낮을수록 안전하며, 지역별(중부 0.25, 남부 0.28, 제주 0.30) 법적 기준이 자동 적용됩니다.</span>
-                      </li>
-                      <li className="flex gap-2">
-                        <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
-                        <span><strong>일사열취득률<br />(SHGC)</strong>: 냉난방 에너지 균형을 고려하기 위한 참고용 지표이며 합격 판정에서 제외됩니다.</span>
-                      </li>
-                    </ul>
-                  </Card>
-                </aside>
+                {/* --- 스펙 진단: 기존 입력 폼 --- */}
+                {inputSubView === "form" && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-3 mb-2">
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => setInputSubView("question")}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer"
+                        style={{ color: "var(--color-text-sub)", borderColor: "var(--color-card-border)", backgroundColor: "var(--color-card)" }}
+                      >
+                        <ArrowRight className="w-3 h-3 rotate-180" />
+                        뒤로
+                      </motion.button>
+                      <span className="text-xs font-semibold" style={{ color: "var(--color-text-sub)" }}>스펙 진단 · 데이터 입력</span>
+                    </div>
+
+                    {prefilledProductModel && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between gap-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
+                            <Sparkles className="w-4 h-4 text-emerald-500" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-emerald-600 dark:text-emerald-400">🎉 추천 제품의 스펙이 자동 입력되었습니다!</p>
+                            <p className="text-[11px] font-semibold text-slate-400 mt-0.5">
+                              선택하신 <strong>{prefilledProductModel}</strong> 제품의 스펙이 적용되었습니다. 상세 사양(SHGC, 기밀성, TDR)을 모르실 경우, 현재 자동 설정된 일반 창호 기본값(SHGC 0.40, 기밀성 3등급, TDR 0.30) 그대로 <strong>오른쪽의 '분석 실행'</strong>을 클릭하셔도 좋습니다.
+                            </p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setPrefilledProductModel(null)} 
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 transition-colors shrink-0 cursor-pointer"
+                        >
+                          닫기
+                        </button>
+                      </motion.div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="md:col-span-2 space-y-6">
+                        <Card title="기본 정보" icon={Settings2}>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <SelectField 
+                              label="분석 지역" 
+                              value={input.region} 
+                              onChange={(v: string) => hc("region", v)}
+                              options={Object.entries(REGIONS).map(([k, v]) => ({ value: k, label: v.name }))}
+                            />
+                            <SelectField 
+                              label="건물 용도" 
+                              value={input.buildingType} 
+                              onChange={(v: string) => hc("buildingType", v)}
+                              options={BUILDING_TYPES}
+                            />
+                            <SelectField 
+                              label="외기 접촉 여부" 
+                              value={input.contactType} 
+                              onChange={(v: string) => hc("contactType", v)}
+                              options={CONTACT_TYPES}
+                            />
+                            <InputField label="창호 면적 (m²)" value={input.area} onChange={(v: string) => hc("area", parseFloat(v))} />
+                          </div>
+                        </Card>
+
+                        <Card title="창호 구성 정보" icon={Info}>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <SelectField 
+                              label="유리구성" 
+                              value={input.glassConfig} 
+                              onChange={(v: string) => hc("glassConfig", v)}
+                              options={[
+                                { value: "single", label: "단층" },
+                                { value: "double", label: "복층" },
+                                { value: "triple", label: "삼중" }
+                              ]}
+                            />
+                            <SelectField 
+                              label="프레임 재질" 
+                              value={input.frame} 
+                              onChange={(v: string) => hc("frame", v)}
+                              options={FRAME_TYPES.map(f => ({ value: f, label: FRAME_LABELS[f] }))}
+                            />
+                            <SelectField 
+                              label="충전기체" 
+                              value={input.gasType} 
+                              onChange={(v: string) => hc("gasType", v)}
+                              options={[
+                                { value: "argon", label: "아르곤" },
+                                { value: "air", label: "공기" }
+                              ]}
+                            />
+                            <SelectField 
+                              label="로이코팅 여부" 
+                              value={input.loweCoating} 
+                              onChange={(v: string) => hc("loweCoating", v)}
+                              options={[
+                                { value: "yes", label: "적용" },
+                                { value: "no", label: "미적용" }
+                              ]}
+                            />
+                          </div>
+                        </Card>
+
+                        <Card title="창호 성능 입력" icon={Thermometer}>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <InputField label="열관류율 (U-value) (W/m²·K)" value={input.uValue} onChange={(v: string) => hc("uValue", parseFloat(v))} step="0.01" />
+                            <InputField label="일사열취득률 (SHGC) (참고값)" value={input.shgc} onChange={(v: string) => hc("shgc", parseFloat(v))} step="0.01" tooltip={"모를 경우 0.40 권장\n(남측 창 등 에너지 계산용)"} />
+                            <SelectField 
+                              label="기밀성 등급" 
+                              value={input.airtight} 
+                              onChange={(v: string) => hc("airtight", parseInt(v))}
+                              options={AIRTIGHT_GRADES.map(g => ({ value: g, label: `${g}등급` }))}
+                              tooltip={"모를 경우 2~3등급 권장\n(일반 기존 창호 기준)"}
+                            />
+                            <InputField label="결로방지성능 (TDR)" value={input.tdr} onChange={(v: string) => hc("tdr", parseFloat(v))} step="0.01" tooltip={"모를 경우 0.20~0.25 권장\n(지역별 결로방지 설계 기준)"} />
+                          </div>
+                        </Card>
+
+                        <Card title="분석 기준 설정 (Thresholds)" icon={Settings2} className="border-blue-500/20 bg-blue-500/5">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                            <InputField label="U-value 기준" value={thresholds.uValue} onChange={(v: string) => ht("uValue", parseFloat(v))} step="0.1" />
+                            <SelectField 
+                              label="기밀성 기준" 
+                              value={thresholds.airtight} 
+                              onChange={(v: string) => ht("airtight", parseInt(v))}
+                              options={AIRTIGHT_GRADES.map(g => ({ value: g, label: `${g}등급 이하` }))}
+                            />
+                            <InputField label="TDR 기준" value={thresholds.tdr} onChange={(v: string) => ht("tdr", parseFloat(v))} step="0.01" />
+                          </div>
+                          <p className="text-[10px] text-blue-400/60 mt-4 italic">
+                            * 건물 및 지역 조건을 변경하면 기준이 자동으로 설정되지만, 필요시 임의 조정이 가능합니다.
+                          </p>
+                        </Card>
+                      </div>
+
+                      <aside className="space-y-6">
+                        <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 shadow-xl shadow-blue-900/20">
+                          <h3 className="text-xl font-black text-white mb-2">진단 시작</h3>
+                          <p className="text-blue-100 text-xs leading-relaxed mb-6">
+                            입력된 데이터를 바탕으로 에너지 효율 등급을 계산하고 개선 방안을 도출합니다.
+                          </p>
+                          <motion.button 
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={handleRunAnalysis}
+                            className="w-full bg-white text-blue-700 font-black py-3 rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center gap-2 group cursor-pointer shadow-md"
+                          >
+                            분석 실행
+                            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                          </motion.button>
+                        </div>
+
+                        <Card title="도움말" icon={Info}>
+                          <ul className="space-y-3 text-xs text-slate-400">
+                            <li className="flex gap-2">
+                              <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
+                              <span><strong>열관류율<br />(U-value)</strong>: 낙을수록 단열 성능이 우수하며, 지역+용도+외기접촉 조합에 맞춘 법적 기준이 자동 적용됩니다.</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
+                              <span><strong>외기간접<br />접촉</strong>: 외기에 직접 면하지 않는 조건일 경우 직접 대비 1.5배 완화된 U-value 기준이 자동 설정됩니다.</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
+                              <span><strong>결로방지<br />(TDR)</strong>: 낙을수록 안전하며, 지역별(중부 0.25, 남부 0.28, 제주 0.30) 법적 기준이 자동 적용됩니다.</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <div className="w-1 h-1 bg-blue-500 rounded-full mt-1.5 shrink-0" />
+                              <span><strong>일사열취득률<br />(SHGC)</strong>: 낙난방 에너지 균형을 고려하기 위한 참고용 지표이며 합격 판정에서 제외됩니다.</span>
+                            </li>
+                          </ul>
+                        </Card>
+                      </aside>
+                    </div>
+                  </div>
+                )}
+
+                {/* --- 제품 추천 폼 및 결과 --- */}
+                {inputSubView === "recommend" && (
+                  <div className="space-y-6">
+                    {/* 뒤로 버튼 */}
+                    <div className="flex items-center gap-3">
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => { setInputSubView("question"); setRecommendResults(null); setRecommendError(null); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer"
+                        style={{ color: "var(--color-text-sub)", borderColor: "var(--color-card-border)", backgroundColor: "var(--color-card)" }}
+                      >
+                        <ArrowRight className="w-3 h-3 rotate-180" />
+                        뒤로
+                      </motion.button>
+                      <span className="text-xs font-semibold" style={{ color: "var(--color-text-sub)" }}>제품 추천 · 조건 입력</span>
+                    </div>
+
+                    {/* 입력 폼 */}
+                    {!recommendResults && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="md:col-span-2 space-y-6">
+                          <Card title="기본 정보" icon={Settings2}>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                              <SelectField
+                                label="분석 지역"
+                                value={recommendInput.region}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, region: v }))}
+                                options={Object.entries(REGIONS).map(([k, v]) => ({ value: k, label: v.name }))}
+                              />
+                              <SelectField
+                                label="건물 용도"
+                                value={recommendInput.buildingType}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, buildingType: v }))}
+                                options={BUILDING_TYPES}
+                              />
+                              <SelectField
+                                label="외기 접촉 여부"
+                                value={recommendInput.contactType}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, contactType: v }))}
+                                options={CONTACT_TYPES}
+                              />
+                              <InputField
+                                label="창호 면적 (m²)"
+                                value={recommendInput.area}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, area: parseFloat(v) || 15 }))}
+                              />
+                            </div>
+                          </Card>
+
+                          <Card title="창호 구성 정보 (선택사항)" icon={Info}>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                              <SelectField
+                                label="유리구성"
+                                value={recommendInput.glassConfig}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, glassConfig: v }))}
+                                options={[
+                                  { value: "전체", label: "전체" },
+                                  { value: "복층", label: "복층" },
+                                  { value: "삼중", label: "삼중" }
+                                ]}
+                              />
+                              <SelectField
+                                label="충전기체"
+                                value={recommendInput.gasType}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, gasType: v }))}
+                                options={[
+                                  { value: "전체", label: "전체" },
+                                  { value: "아르곤", label: "아르곤" },
+                                  { value: "기타", label: "기타" }
+                                ]}
+                              />
+                              <SelectField
+                                label="프레임재질"
+                                value={recommendInput.frameType}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, frameType: v }))}
+                                options={[
+                                  { value: "전체", label: "전체" },
+                                  { value: "알루미늄", label: "알루미늄" },
+                                  { value: "PVC", label: "PVC" },
+                                  { value: "기타", label: "기타" }
+                                ]}
+                              />
+                              <SelectField
+                                label="로이코팅 여부"
+                                value={recommendInput.loweCoating}
+                                onChange={(v: string) => setRecommendInput(p => ({ ...p, loweCoating: v }))}
+                                options={[
+                                  { value: "전체", label: "전체" },
+                                  { value: "적용", label: "적용" },
+                                  { value: "미적용", label: "미적용" }
+                                ]}
+                              />
+                            </div>
+                          </Card>
+
+                          <Card title="적용 기준 안내" icon={Info} className="border-blue-500/20 bg-blue-500/5">
+                            <div className="space-y-2 text-xs" style={{ color: "var(--color-text-sub)" }}>
+                              <p>선택하신 조건(지역·용도·외기접촉)에 따라 에너지절약설계기준의 법적 열관류율(Uw) 기준값이 자동 산출됩니다.</p>
+                              <p>해당 기준 이하의 인증 제품 중 Uw 낙은 순으로 상위 5개를 추천합니다.</p>
+                              <p className="text-blue-500 font-semibold">성능 수치(Uw·SHGC·기밀성·TDR)는 필터링 후 추천 결과로 확인하세요.</p>
+                            </div>
+                          </Card>
+                        </div>
+
+                        <aside className="space-y-6">
+                          <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-2xl p-6 shadow-xl shadow-emerald-900/20">
+                            <h3 className="text-xl font-black text-white mb-2">추천받기</h3>
+                            <p className="text-emerald-100 text-xs leading-relaxed mb-6">
+                              조건에 맞는 인증 제품을 DB에서 필터링하여 최적 5개를 추천합니다.
+                            </p>
+                            <motion.button
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              disabled={recommendLoading}
+                              onClick={async () => {
+                                const uwThreshold = U_VALUE_THRESHOLDS[recommendInput.buildingType]?.[recommendInput.contactType]?.[recommendInput.region] ?? 1.0;
+                                console.log('[App.tsx] 추천받기 요청 필터:', { uwThreshold, glassConfig: recommendInput.glassConfig, gasType: recommendInput.gasType, frameType: recommendInput.frameType, loweCoating: recommendInput.loweCoating });
+                                setRecommendLoading(true);
+                                setRecommendError(null);
+                                try {
+                                  const products = await getRecommendedProducts(uwThreshold, 5, recommendInput.glassConfig, recommendInput.gasType, recommendInput.frameType, recommendInput.loweCoating);
+                                  if (!products || products.length === 0) {
+                                    setRecommendError("조건에 맞는 제품이 없습니다.");
+                                    setRecommendResults([]);
+                                  } else {
+                                    setRecommendResults(products);
+                                  }
+                                } catch(err: any) {
+                                  setRecommendError(err.message || "조회 실패");
+                                  setRecommendResults([]);
+                                } finally {
+                                  setRecommendLoading(false);
+                                }
+                              }}
+                              className="w-full bg-white text-emerald-700 font-black py-3 rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center gap-2 group cursor-pointer shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              {recommendLoading ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" />조회 중...</>
+                              ) : (
+                                <>추천받기 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+                              )}
+                            </motion.button>
+                          </div>
+                        </aside>
+                      </div>
+                    )}
+
+                    {/* 결과 카드 */}
+                    {recommendResults !== null && (
+                      <div className="space-y-4">
+                        {(() => {
+                          const uwThreshold = U_VALUE_THRESHOLDS[recommendInput.buildingType]?.[recommendInput.contactType]?.[recommendInput.region] ?? 1.0;
+                          return (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <h3 className="text-base font-black" style={{ color: "var(--color-text)" }}>
+                                    추천 결과
+                                  </h3>
+                                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-sub)" }}>
+                                    법적 Uw 기준: <span className="font-bold text-blue-500">{uwThreshold.toFixed(1)} W/m²·K 이하</span> · 상위 5개 (열관류율 낙은 순)
+                                  </p>
+                                </div>
+                                <motion.button
+                                  whileHover={{ scale: 1.03 }}
+                                  whileTap={{ scale: 0.97 }}
+                                  onClick={() => setRecommendResults(null)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer"
+                                  style={{ color: "var(--color-text-sub)", borderColor: "var(--color-card-border)", backgroundColor: "var(--color-card)" }}
+                                >
+                                  <RefreshCcw className="w-3 h-3" /> 조건 다시 입력
+                                </motion.button>
+                              </div>
+
+                              {recommendError && (
+                                <div className="py-8 text-center rounded-2xl border border-rose-200 dark:border-rose-500/20 bg-rose-500/5">
+                                  <AlertTriangle className="w-8 h-8 text-rose-500 mx-auto mb-2" />
+                                  <p className="text-rose-500 font-bold text-sm">{recommendError}</p>
+                                </div>
+                              )}
+
+                              {!recommendError && recommendResults.length === 0 && (
+                                <div className="py-10 text-center rounded-2xl border" style={{ borderColor: "var(--color-card-border)", backgroundColor: "var(--color-card)" }}>
+                                  <Database className="w-10 h-10 mx-auto mb-3" style={{ color: "var(--color-text-sub)" }} />
+                                  <p className="font-bold text-sm" style={{ color: "var(--color-text)" }}>해당 조건에 맞는 제품이 없습니다</p>
+                                  <p className="text-xs mt-1" style={{ color: "var(--color-text-sub)" }}>지역 또는 용도 조건을 변경해보세요.</p>
+                                </div>
+                              )}
+
+                              {recommendResults.map((product: any, idx: number) => {
+                                const uw = typeof product.열관류율 === 'number' ? product.열관류율 : parseFloat(product.열관류율);
+                                const loweLabel = product.로이여부 === true || product.로이여부 === 'true' || product.로이여부 === 1 ? '적용' : '미적용';
+                                const isBest = idx === 0;
+                                return (
+                                  <motion.div
+                                    key={product.id || idx}
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: idx * 0.06 }}
+                                    className={cn(
+                                      "rounded-2xl border p-5 transition-all",
+                                      isBest
+                                        ? "border-emerald-500/40 bg-emerald-500/5 dark:bg-emerald-500/5"
+                                        : ""
+                                    )}
+                                    style={!isBest ? { borderColor: "var(--color-card-border)", backgroundColor: "var(--color-card)" } : {}}
+                                  >
+                                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className={cn(
+                                          "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0",
+                                          isBest ? "bg-emerald-500 text-white" : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                                        )}>
+                                          {idx + 1}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <h4 className="text-sm font-black truncate" style={{ color: "var(--color-text)" }}>
+                                              {product.모델명 || product.모델명 || '제품명 없음'}
+                                            </h4>
+                                            {isBest && (
+                                              <span className="px-2 py-0.5 bg-emerald-500 text-white text-[10px] font-black rounded-full shrink-0">BEST</span>
+                                            )}
+                                          </div>
+                                          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-sub)" }}>
+                                            {product.업체명 || product.manufacturer || ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <span className={cn("text-2xl font-black", isBest ? "text-emerald-500" : "")} style={!isBest ? { color: "var(--color-primary)" } : {}}>
+                                          {isNaN(uw) ? '-' : uw.toFixed(2)}
+                                        </span>
+                                        <span className="text-[10px] font-bold mt-1" style={{ color: "var(--color-text-sub)" }}>W/m²·K</span>
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
+                                      <div className="rounded-xl p-3 text-center" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-card-border)" }}>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-sub)" }}>유리구성</p>
+                                        <p className="text-xs font-black" style={{ color: "var(--color-text)" }}>{product.유리구성 || '-'}</p>
+                                      </div>
+                                      <div className="rounded-xl p-3 text-center" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-card-border)" }}>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-sub)" }}>프레임</p>
+                                        <p className="text-xs font-black" style={{ color: "var(--color-text)" }}>{product.프레임재질 || '-'}</p>
+                                      </div>
+                                      <div className="rounded-xl p-3 text-center" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-card-border)" }}>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-sub)" }}>로이코팅</p>
+                                        <p className={cn("text-xs font-black", loweLabel === '적용' ? 'text-emerald-500' : '')} style={loweLabel !== '적용' ? { color: "var(--color-text-sub)" } : {}}>{loweLabel}</p>
+                                      </div>
+                                      <div className="rounded-xl p-3 text-center" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-card-border)" }}>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-sub)" }}>충전기체</p>
+                                        <p className="text-xs font-black" style={{ color: "var(--color-text)" }}>{product.충전기체 || '-'}</p>
+                                      </div>
+                                      <div className="rounded-xl p-3 text-center col-span-2 sm:col-span-1" style={{ backgroundColor: "var(--color-bg)", border: "1px solid var(--color-card-border)" }}>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "var(--color-text-sub)" }}>효율등급</p>
+                                        <p className="text-xs font-black" style={{ color: "var(--color-text)" }}>{product.효율등급 != null ? product.효율등급 + '등급' : '-'}</p>
+                                      </div>
+                                    </div>
+                                    <div className="mt-4 flex justify-end">
+                                      <motion.button
+                                        whileHover={{ scale: 1.02 }}
+                                        whileTap={{ scale: 0.98 }}
+                                        onClick={() => handleSelectProductForDiagnosis(product)}
+                                        className={cn(
+                                          "px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-sm",
+                                          isBest
+                                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                            : "bg-slate-800 hover:bg-slate-700 text-white border border-slate-700"
+                                        )}
+                                      >
+                                        이 제품 선택하여 스펙 진단하기
+                                        <ArrowRight className="w-3.5 h-3.5" />
+                                      </motion.button>
+                                    </div>
+                                  </motion.div>
+                                );
+                              })}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -3523,7 +3992,7 @@ function App() {
 
           <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 border-t border-slate-100 pt-6">
             <span>WinEnergy Analysis Report</span>
-            <span>Page 1 of 4</span>
+            <span>Page 1 of 3</span>
           </div>
         </div>
 
@@ -3606,7 +4075,7 @@ function App() {
 
           <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 border-t border-slate-100 pt-6">
             <span>WinEnergy Analysis Report</span>
-            <span>Page 2 of 4</span>
+            <span>Page 2 of 3</span>
           </div>
         </div>
 
@@ -3687,74 +4156,7 @@ function App() {
 
           <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 border-t border-slate-100 pt-6">
             <span>WinEnergy Analysis Report</span>
-            <span>Page 3 of 4</span>
-          </div>
-        </div>
-
-        {/* PAGE 5: RECOMMENDED PRODUCTS */}
-        <div 
-          id="pdf-page-products"
-          style={{ width: '800px', height: '1130px' }}
-          className="relative flex flex-col justify-between p-16 bg-white border border-slate-200 box-border overflow-hidden"
-        >
-          <div className="flex justify-between items-center border-b border-slate-100 pb-4">
-            <span className="text-xs font-bold text-slate-400">4. 에너지 기준 충족 추천 제품</span>
-            <span className="text-xs font-bold text-blue-600">WinEnergy Report</span>
-          </div>
-
-          <div className="flex-1 my-8 space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-2xl font-black text-slate-900">4. 에너지 등급 우수 추천 제품 (Top 5)</h2>
-              <p className="text-xs text-slate-400">
-                입력하신 조건 및 법적 에너지 설계 요건을 완벽하게 만족하고 에너지를 최소화할 수 있는 데이터베이스 내 고성능 창세트 목록입니다.
-              </p>
-            </div>
-
-            <div className="overflow-hidden border border-slate-100 rounded-xl">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-400 border-b border-slate-100">
-                    <th className="p-3 font-bold">순위</th>
-                    <th className="p-3 font-bold">제조사</th>
-                    <th className="p-3 font-bold">모델명</th>
-                    <th className="p-3 font-bold text-center">유리 구성</th>
-                    <th className="p-3 font-bold text-right">열관류율</th>
-                    <th className="p-3 font-bold text-center">기밀성</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {supabaseProducts && supabaseProducts.length > 0 ? (
-                    supabaseProducts.slice(0, 5).map((p: any, idx: number) => (
-                      <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="p-3 text-slate-500 font-bold">{idx + 1}</td>
-                        <td className="p-3 text-slate-800 font-bold">{p.업체명 || p.manufacturer || "-"}</td>
-                        <td className="p-3 text-slate-800 font-bold max-w-[200px] truncate">{p.모델명 || p.modelName || "-"}</td>
-                        <td className="p-3 text-slate-500 text-center text-[10px]">{p.유리구성 || p.glassStructure || "-"}</td>
-                        <td className="p-3 text-blue-600 font-black text-right">{p.열관류율 || p.uValue || "-"} W/m²K</td>
-                        <td className="p-3 text-slate-500 text-center font-bold">{p.기밀성 || p.airtightness || "-"}등급</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-slate-400">
-                        현재 검색 조건을 충족하는 고성능 우수 추천 제품이 존재하지 않습니다.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-[10px] text-slate-400 space-y-1">
-              <p className="font-bold text-slate-500">• 제품 정보 안내</p>
-              <p>본 보고서에 나열된 제품들은 한국에너지공단에 정식 등록된 창세트 데이터베이스를 바탕으로 실시간 추출된 상위 고성능 모델들입니다.</p>
-              <p>열관류율 단위는 W/m²·K이며, 수치가 낮을수록 열손실을 효과적으로 방지하는 우수한 단열 성능을 가집니다.</p>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 border-t border-slate-100 pt-6">
-            <span>WinEnergy Analysis Report</span>
-            <span>Page 4 of 4</span>
+            <span>Page 3 of 3</span>
           </div>
         </div>
       </div>
