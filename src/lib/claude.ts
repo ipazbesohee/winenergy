@@ -31,6 +31,8 @@ export async function getClaudeWindowAnalysis(data: {
   frame: string;
   buildingType: string;
   contactType: string;
+  /** DB에서 조회한 실제 개선 후보 제품 목록 (열관류율 오름차순) */
+  dbProducts?: Array<{ 모델명?: string; 열관류율: number; 효율등급?: number; 프레임재질?: string }>;
 }): Promise<ClaudeAnalysisResult> {
   const frameLabelMap: Record<string, string> = {
     AL: '알루미늄',
@@ -61,7 +63,8 @@ export async function getClaudeWindowAnalysis(data: {
 [에너지 절감량 및 CO2 계산 공식 — 반드시 이 공식을 사용하세요]
 
 에너지 절감량:
-Q절감(kWh/년) = (U현재 - U개선) × 창호면적(m²) × 난방도일 × 24
+Q절감(kWh/년) = (U현재 - U개선) × 창호면적(m²) × 난방도일 × 24 / 1000
+(W → kWh 단위 변환: ÷1000 필수. 이 값은 kWh/년 단위임)
 
 지역별 난방도일(°C·day):
 - 중부1: 3,320
@@ -121,20 +124,45 @@ CO2(kg/년) = Q절감 × 0.4599
 - 지역 난방도일 (HDD): ${hdd} °C·day
 
 [에너지 절감량 계산 공식]
-Q절감(kWh/년) = (U현재 - U개선) × ${data.area} m² × ${hdd} °C·day × 24
+Q절감(kWh/년) = (U현재 - U개선) × ${data.area} m² × ${hdd} °C·day × 24 / 1000
 CO2(kg/년) = Q절감 × 0.4599 (환경부 전력 배출계수 2022 기준)
 
 [분석 요청]
 1. 현재 성능에 대한 종합 요약 (전문적이고 신뢰감 있는 톤)
 2. 각 지표별 심층 분석 (에너지 손실 관점에서 U-value, SHGC(참고용), 기밀성, TDR 각각 분석)
-3. 구체적이고 실현 가능한 개선 전략 최소 3가지:
-   - 각 전략별 달성 가능한 U개선 값을 명시하고
-   - 위 공식을 반드시 적용하여 에너지 절감량(kWh/년)과 CO2 저감량(kg/년)을 계산해서 제시
-   - 계산 과정(U현재, U개선, 면적, HDD 대입 결과)을 description에 포함
+3. 아래 [DB 개선 후보 제품]을 각 전략의 U개선 값으로 사용하세요:
+   - DB 제품의 실제 열관류율을 U개선으로 대입해 공식 계산 (임의 추정 금지)
+   - 이미 계산된 절감량이 제공되면 그 수치를 그대로 사용
+   - 계산 과정(U현재 - U개선, 면적, HDD 대입)을 description에 포함
 4. 개선 시 예상되는 경제적/환경적 효과
-5. 총 연간 에너지 절감량(kWh)과 CO2 저감량(kg) — 공식 계산값을 사용하고 임의 추정 금지
+5. 총 연간 에너지 절감량(kWh)과 CO2 저감량(kg) — DB 제품 기반 계산값만 사용
 
 전략 제목은 차트에 표시하기 위해 10자 내외로 간결하게 작성해주세요.`;
+
+  // DB 개선 후보 제품이 있으면 user prompt에 추가
+  const productsPromptSection = (() => {
+    if (!data.dbProducts || data.dbProducts.length === 0) {
+      return `
+[DB 개선 후보 제품]
+현재 열관류율(${data.uValue} W/m²·K)보다 낮은 인증 제품이 DB에 없습니다.
+이 경우 "이미 DB 내 최고 수준 창호"임을 명시하고, 절감 계산 대신 추가 개선 여지가 제한적임을 안내하세요.`;
+    }
+    const lines = data.dbProducts.slice(0, 3).map((p, i) => {
+      // ★ parseFloat으로 반드시 숫자 변환 (DB에서 문자열로 올 수 있음)
+      const uTarget = parseFloat(String(p.열관류율));
+      if (isNaN(uTarget) || uTarget >= data.uValue) return null; // 비정상값 건너뜀
+      // ★ /1000으로 Wh→kWh 단위 변환
+      const savings = (data.uValue - uTarget) * data.area * hdd * 24 / 1000;
+      const co2 = savings * 0.4599;
+      return `  ${i + 1}. ${p.모델명 || '인증제품'} | Uw=${uTarget} W/m²·K | 효율등급 ${p.효율등급 || '-'}등급\n     절감량(공식계산): (${data.uValue} - ${uTarget}) × ${data.area} × ${hdd} × 24 / 1000 = ${savings.toFixed(0)} kWh/년, CO2 = ${co2.toFixed(0)} kg/년`;
+    }).filter(Boolean);
+    return `
+[DB 개선 후보 제품] (현재 Uw ${data.uValue}보다 낮은 실제 인증 제품, 열관류율 오름차순)
+${lines.join('\n')}
+위 절감량은 공식(÷1000으로 kWh 변환)으로 미리 계산된 값입니다. 반드시 이 수치를 strategicImprovements의 energySavingsKwh, co2ReductionKg에 사용하세요.`;
+  })();
+
+  const fullUserPrompt = userPrompt + productsPromptSection;
 
   const response = await fetch(API_URL, {
     method: 'POST',
@@ -151,7 +179,7 @@ CO2(kg/년) = Q절감 × 0.4599 (환경부 전력 배출계수 2022 기준)
       messages: [
         {
           role: 'user',
-          content: userPrompt,
+          content: fullUserPrompt,
         },
       ],
     }),

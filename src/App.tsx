@@ -1840,6 +1840,10 @@ function App() {
     gasType: "argon"
   });
   const [result, setResult] = useState<any>(null);
+  // 진단 실행 시 실제로 사용된 input 스냅샷 — 심층 분석이 항상 최신 진단 값을 참조하도록
+  const [analysisInput, setAnalysisInput] = useState<typeof input | null>(null);
+  // Ref mirror: always holds the latest analysisInput regardless of render closure
+  const analysisInputRef = useRef<typeof input | null>(null);
   const [tab, setTab] = useState("stats");
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem("theme");
@@ -1930,6 +1934,18 @@ function App() {
 
   const [aiAnalysis, setAiAnalysis] = useState<ClaudeAnalysisResult | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  // DB에서 조회한 최선 개선 제품의 열관류율 (카드 라벨 표시용)
+  const [aiImprovementUw, setAiImprovementUw] = useState<number | null>(null);
+  // 클라이언트에서 직접 계산한 절감량 (Claude JSON 수치를 신뢰하지 않음)
+  const [clientSavings, setClientSavings] = useState<{ kWh: number; co2: number; uTarget: number } | null>(null);
+
+  // 지역 키 → 난방도일 매핑 (claude.ts와 동일 기준)
+  const HDD_BY_REGION: Record<string, number> = {
+    central1: 3320,
+    central2: 2880,
+    south: 1900,
+    jeju: 1200,
+  };
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -2082,10 +2098,12 @@ function App() {
     const activeInput = isSpecApply ? (customInput as typeof input) : input;
     const res = analyze(activeInput, thresholds);
     setResult(res);
+    setAnalysisInput(activeInput);   // 심층 분석 데이터소스 통일
+    analysisInputRef.current = activeInput; // ref도 동시 업데이트 (stale closure 방지)
     setTab("result");
-    if (!isSpecApply) {
-      setAiAnalysis(null);
-    }
+    setAiAnalysis(null);
+    setClientSavings(null);
+    setAiImprovementUw(null);
 
     // Supabase에서 제품 데이터 가져오기
     setIsProductsLoading(true);
@@ -2200,18 +2218,67 @@ function App() {
   const handleAiAnalysis = async () => {
     if (!result) return;
     setIsAiLoading(true);
+    setAiImprovementUw(null);
+    setClientSavings(null);
     try {
-      const regionName = (REGIONS as any)[input.region].name;
+      // ★ 진단 결과 탭과 동일한 소스: ref로 최신 analysisInput을 읽음 (stale closure 방지)
+      const src = analysisInputRef.current ?? input;
+      const regionName = (REGIONS as any)[src.region].name;
+      // ★ parseFloat으로 확실하게 숫자 변환 (DB 문자열 방어)
+      const currentUw = parseFloat(String(src.uValue));
+      const area = parseFloat(String(src.area)) || 15;
+      const hdd = HDD_BY_REGION[src.region] ?? 2880;
+
+      // ★ 현재 Uw보다 엄격히 낮은 제품만 조회 (더 좋은 = 낮은 제품만)
+      let dbProducts: Array<{ 모델명?: string; 열관류율: number; 효율등급?: number; 프레임재질?: string }> = [];
+      try {
+        const rawProducts = await getProductsByUValue(
+          currentUw,   // 현재 Uw 미만인 제품만
+          undefined,   // 프레임 필터 없음
+          undefined,   // 유리구성 필터 없음
+          undefined,   // 로이 필터 없음
+          true,        // isStrictlyLower: 반드시 currentUw 미만
+          20           // 충분히 가져온 후 클라이언트에서 정렬
+        );
+        if (rawProducts && rawProducts.length > 0) {
+          // ★ parseFloat으로 숫자 변환 후 오름차순 정렬 → 상위 3개
+          dbProducts = rawProducts
+            .map((p: any) => ({
+              모델명: p.모델명 ?? undefined,
+              // ★ 핵심 수정: 반드시 parseFloat로 숫자 변환 (문자열 → NaN 방지)
+              열관류율: parseFloat(String(p.열관류율)),
+              효율등급: p.효율등급 ?? undefined,
+              프레임재질: p.프레임재질 ?? undefined,
+            }))
+            // ★ 변환 후에도 currentUw보다 높거나 NaN인 제품 필터
+            .filter((p) => !isNaN(p.열관류율) && p.열관류율 < currentUw)
+            .sort((a, b) => a.열관류율 - b.열관류율)
+            .slice(0, 3);
+
+          if (dbProducts.length > 0) {
+            // ★ 1위 제품 기준으로 클라이언트 계산 (단위: kWh = /1000)
+            const bestUw = dbProducts[0].열관류율;
+            const kWh = (currentUw - bestUw) * area * hdd * 24 / 1000;
+            const co2 = kWh * 0.4599;
+            setAiImprovementUw(bestUw);
+            setClientSavings({ kWh: Math.round(kWh), co2: Math.round(co2), uTarget: bestUw });
+          }
+        }
+      } catch (dbErr) {
+        console.warn('[AI] DB 제품 조회 실패:', dbErr);
+      }
+
       const aiRes = await getClaudeWindowAnalysis({
-        uValue: input.uValue,
-        shgc: input.shgc,
-        airtight: input.airtight,
-        tdr: input.tdr,
-        area: input.area,
+        uValue: currentUw,
+        shgc: parseFloat(String(src.shgc)),
+        airtight: src.airtight,
+        tdr: src.tdr,
+        area,
         regionName,
-        frame: input.frame,
-        buildingType: input.buildingType,
-        contactType: input.contactType
+        frame: src.frame,
+        buildingType: src.buildingType,
+        contactType: src.contactType,
+        dbProducts,
       });
       setAiAnalysis(aiRes);
     } catch (error) {
@@ -2539,6 +2606,9 @@ function App() {
                   } else {
                     setTab(t.id);
                     if (t.id === "input") setInputSubView("question");
+                    if (t.id === "ai" && !aiAnalysis && !isAiLoading) {
+                      handleAiAnalysis();
+                    }
                     setActiveTooltipTab(null);
                   }
                 }}
@@ -3281,7 +3351,12 @@ function App() {
                   <motion.button 
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
-                    onClick={() => setTab("ai")}
+                    onClick={() => {
+                      setTab("ai");
+                      if (!aiAnalysis && !isAiLoading) {
+                        handleAiAnalysis();
+                      }
+                    }}
                     className="flex items-center gap-2 px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black transition-all shadow-lg shadow-blue-900/40 group cursor-pointer"
                   >
                     <Sparkles className="w-5 h-5" />
@@ -3330,19 +3405,36 @@ function App() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="md:col-span-2 space-y-6">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Card title="연간 예상 에너지 절감" icon={BarChart3} className="bg-emerald-500/5 border-emerald-500/20">
+                        {/* ★ 카드 숫자는 Claude JSON이 아닌 clientSavings(클라이언트 직접 계산)를 표시 */}
+                        <Card title="개선 시 절감 잠재력" icon={BarChart3} className="bg-emerald-500/5 border-emerald-500/20">
                           <div className="flex items-end gap-2">
-                            <span className="text-3xl font-black text-emerald-500"><CountUp end={aiAnalysis.energySavingsKwh} /></span>
+                            <span className="text-3xl font-black text-emerald-500">
+                              {clientSavings != null ? <CountUp end={clientSavings.kWh} /> : <CountUp end={aiAnalysis.energySavingsKwh} />}
+                            </span>
                             <span className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">kWh/년</span>
                           </div>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2 font-medium">개선안 적용 시 예상되는 연간 전력 절감량</p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 font-medium">
+                            {clientSavings != null
+                              ? `현재 ${parseFloat(String((analysisInputRef.current ?? input).uValue)).toFixed(3)} → 개선 ${clientSavings.uTarget} W/m²·K 기준`
+                              : `현재 ${(analysisInput ?? input).uValue} W/m²·K — DB 내 최고 수준`}
+                          </p>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">현재 창호를 DB 실제 인증제품으로 교체 시 절감 잠재량</p>
+                          <p className="text-[9px] text-slate-400/80 dark:text-slate-500/80 mt-1 font-semibold leading-normal">※ 이 값은 현재 창호를 더 우수한 제품으로 교체할 때의 절감 잠재력입니다. 값이 작을수록 현재 창호가 이미 우수하다는 의미입니다.</p>
                         </Card>
-                        <Card title="연간 예상 CO2 저감" icon={Wind} className="bg-blue-500/5 border-blue-500/20">
+                        <Card title="개선 시 CO2 저감 잠재력" icon={Wind} className="bg-blue-500/5 border-blue-500/20">
                           <div className="flex items-end gap-2">
-                            <span className="text-3xl font-black text-blue-500"><CountUp end={aiAnalysis.co2ReductionKg} /></span>
+                            <span className="text-3xl font-black text-blue-500">
+                              {clientSavings != null ? <CountUp end={clientSavings.co2} /> : <CountUp end={aiAnalysis.co2ReductionKg} />}
+                            </span>
                             <span className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">kg/년</span>
                           </div>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2 font-medium">탄소 배출권 거래제 기준 추정치</p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 font-medium">
+                            {clientSavings != null
+                              ? `현재 ${parseFloat(String((analysisInputRef.current ?? input).uValue)).toFixed(3)} → 개선 ${clientSavings.uTarget} W/m²·K 기준`
+                              : `현재 ${(analysisInput ?? input).uValue} W/m²·K — DB 내 최고 수준`}
+                          </p>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">환경부 배출계수 0.4599 kg/kWh 적용</p>
+                          <p className="text-[9px] text-slate-400/80 dark:text-slate-500/80 mt-1 font-semibold leading-normal">※ 이 값은 현재 창호를 더 우수한 제품으로 교체할 때의 절감 잠재력입니다. 값이 작을수록 현재 창호가 이미 우수하다는 의미입니다.</p>
                         </Card>
                       </div>
 
@@ -3350,6 +3442,7 @@ function App() {
                       <div className="px-1 py-2 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed space-y-0.5">
                         <p>* 에너지 절감량 = (U현재 − U개선) × 창호면적 × 난방도일 × 24 (HDD: 중부1 3,320 / 중부2 2,880 / 남부 1,900 / 제주 1,200 °C·day)</p>
                         <p>* CO2 절감량 = 에너지절감량 × 0.4599 (환경부 전력 배출계수 2022 기준)</p>
+                        <p className="text-[9px] text-slate-400/80 dark:text-slate-500/80 mt-1 font-semibold">※ 본 절감량은 관류열손실(U-value 기준) 절감분이며, 일사취득(SHGC) 및 냉방부하는 제외된 약식 추정치입니다.</p>
                       </div>
                       
                       <Card title="종합 진단 요약" icon={Info}>
